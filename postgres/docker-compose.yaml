@@ -1,0 +1,61 @@
+services:
+  postgres-primary:
+    container_name: postgres-primary
+    build: .
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8 --data-checksums"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - narumir
+    ports:
+      - 5432:5432
+    restart: unless-stopped
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    volumes:
+      - postgres-primary-data:/var/lib/postgresql
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+    shm_size: 256mb
+
+  postgres-replica:
+    container_name: postgres-replica
+    build: .
+    user: postgres
+    entrypoint: ["bash", "/usr/local/bin/replica-entrypoint.sh"]
+    env_file:
+      - ./.env
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - narumir
+    ports:
+      - 5433:5432
+    restart: unless-stopped
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    shm_size: 256mb
+
+volumes:
+  postgres-primary-data:
+    driver: local
+  postgres-replica-data:
+    driver: local
+
+networks:
+  narumir:
+    external: true
+
