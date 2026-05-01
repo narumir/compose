@@ -1,0 +1,89 @@
+services:
+  redis-node-1:
+    container_name: redis-node-1
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-hostname redis-node-1 --requirepass ${REDIS_PASSWORD} --masterauth ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    image: redis:8.6.2
+    networks:
+      - narumir
+    ports:
+      - 6379:6379
+    restart: unless-stopped
+    volumes:
+      - redis-node-1-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+  redis-node-2:
+    container_name: redis-node-2
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-hostname redis-node-2 --requirepass ${REDIS_PASSWORD} --masterauth ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    image: redis:8.6.2
+    networks:
+      - narumir
+    ports:
+      - 6380:6379
+    restart: unless-stopped
+    volumes:
+      - redis-node-2-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+  redis-node-3:
+    container_name: redis-node-3
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-announce-hostname redis-node-3 --requirepass ${REDIS_PASSWORD} --masterauth ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    image: redis:8.6.2
+    networks:
+      - narumir
+    ports:
+      - 6381:6379
+    restart: unless-stopped
+    volumes:
+      - redis-node-3-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+  redis-cluster-init:
+    container_name: redis-cluster-init
+    depends_on:
+      redis-node-1:
+        condition: service_healthy
+      redis-node-2:
+        condition: service_healthy
+      redis-node-3:
+        condition: service_healthy
+    image: redis:8.6.2
+    networks:
+      - narumir
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        if redis-cli -h redis-node-1 -a ${REDIS_PASSWORD} cluster info | grep -q 'cluster_state:ok'; then
+          echo 'Cluster already initialized'
+        else
+          redis-cli --cluster create redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 -a ${REDIS_PASSWORD} --cluster-yes
+        fi
+
+volumes:
+  redis-node-1-data:
+    driver: local
+  redis-node-2-data:
+    driver: local
+  redis-node-3-data:
+    driver: local
+
+networks:
+  narumir:
+    external: true
