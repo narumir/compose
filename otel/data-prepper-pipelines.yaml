@@ -1,0 +1,67 @@
+otel-trace-pipeline:
+  workers: 2
+  delay: "100"
+  source:
+    otel_trace_source:
+      ssl: false
+      port: 21890
+  buffer:
+    bounded_blocking:
+      buffer_size: 10240
+      batch_size: 160
+  sink:
+    - pipeline:
+        name: raw-trace-pipeline
+    - pipeline:
+        name: otel-apm-service-map-pipeline
+
+raw-trace-pipeline:
+  workers: 2
+  delay: "100"
+  source:
+    pipeline:
+      name: otel-trace-pipeline
+  buffer:
+    bounded_blocking:
+      buffer_size: 10240
+      batch_size: 160
+  processor:
+    - otel_traces:
+    - otel_trace_group:
+        hosts: ["http://opensearch:9200"]
+        username: admin
+        password: "${OPENSEARCH_PASSWORD}"
+  sink:
+    - opensearch:
+        hosts: ["http://opensearch:9200"]
+        username: admin
+        password: "${OPENSEARCH_PASSWORD}"
+        index_type: trace-analytics-raw
+
+otel-apm-service-map-pipeline:
+  workers: 2
+  delay: "100"
+  source:
+    pipeline:
+      name: otel-trace-pipeline
+  buffer:
+    bounded_blocking:
+      buffer_size: 10240
+      batch_size: 160
+  processor:
+    - otel_apm_service_map:
+        window_duration: 60s
+        db_path: "data/otel-apm-service-map/"
+  route:
+    - metrics: '/kind == "SUM" or /kind == "HISTOGRAM" or /kind == "GAUGE" or /kind == "SUMMARY" or /kind == "EXPONENTIAL_HISTOGRAM"'
+  sink:
+    - opensearch:
+        hosts: ["http://opensearch:9200"]
+        username: admin
+        password: "${OPENSEARCH_PASSWORD}"
+        index_type: custom
+        index: "otel-v2-apm-service-map"
+    - prometheus:
+        url: "http://prometheus:9090/api/v1/write"
+        insecure: true
+        routes: [metrics]

@@ -1,0 +1,184 @@
+services:
+  opensearch:
+    container_name: opensearch
+    build: .
+    image: opensearch-nori:3.6.0
+    environment:
+      - cluster.name=${OTEL_CLUSTER_NAME}
+      - node.name=opensearch
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - action.auto_create_index=true
+      - action.destructive_requires_name=true
+      - plugins.security.ssl.http.enabled=false
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u admin:${OPENSEARCH_PASSWORD} http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - narumir
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    restart: unless-stopped
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+  opensearch-dashboards:
+    container_name: opensearch-dashboards
+    image: opensearchproject/opensearch-dashboards:3.6.0
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_USERNAME: ${OPENSEARCH_DASHBOARDS_USERNAME}
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_DASHBOARDS_PASSWORD}
+    networks:
+      - narumir
+    ports:
+      - "5601:5601"
+    restart: unless-stopped
+    volumes:
+      - opensearch-dashboards-data:/usr/share/opensearch-dashboards/data
+      - ./opensearch_dashboards.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml:ro
+
+  otel-collector:
+    container_name: otel-collector
+    image: otel/opentelemetry-collector-contrib:0.150.1
+    command:
+      ["--config=/etc/otelcol/config.yaml", "--feature-gates=service.profilesSupport"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      pyroscope:
+        condition: service_started
+      data-prepper:
+        condition: service_healthy
+    networks:
+      - narumir
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    restart: unless-stopped
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
+
+  data-prepper:
+    container_name: data-prepper
+    image: opensearchproject/data-prepper:2.15.0
+    entrypoint: ["/bin/sh", "/usr/local/bin/data-prepper-entrypoint.sh"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4900/list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - narumir
+    ports:
+      - "21890:21890"
+      - "4900:4900"
+    restart: unless-stopped
+    volumes:
+      - ./data-prepper-pipelines.yaml:/tmp/pipelines.yaml.tmpl:ro
+      - ./data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml:ro
+      - ./data-prepper-entrypoint.sh:/usr/local/bin/data-prepper-entrypoint.sh:ro
+    environment:
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
+
+  pyroscope:
+    container_name: pyroscope
+    image: grafana/pyroscope:1.20.3
+    networks:
+      - narumir
+    ports:
+      - "4040:4040"
+    restart: unless-stopped
+    volumes:
+      - pyroscope-data:/data
+
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.32.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    networks:
+      - narumir
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+    volumes:
+      - alertmanager-data:/alertmanager
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v3.11.2
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-remote-write-receiver"
+    depends_on:
+      alertmanager:
+        condition: service_started
+    networks:
+      - narumir
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules:/etc/prometheus/rules:ro
+
+  postgres-exporter:
+    container_name: postgres-exporter
+    image: prometheuscommunity/postgres-exporter:v0.19.1
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-primary:5432/${POSTGRES_DB}?sslmode=disable"
+    networks:
+      - narumir
+    ports:
+      - "9187:9187"
+    restart: unless-stopped
+
+  redis-exporter:
+    container_name: redis-exporter
+    image: oliver006/redis_exporter:v1.82.0
+    environment:
+      REDIS_ADDR: "redis-node-1:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    networks:
+      - narumir
+    ports:
+      - "9121:9121"
+    restart: unless-stopped
+
+networks:
+  narumir:
+    external: true
+
+volumes:
+  opensearch-data:
+    driver: local
+  opensearch-dashboards-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  pyroscope-data:
+    driver: local
+  alertmanager-data:
+    driver: local
